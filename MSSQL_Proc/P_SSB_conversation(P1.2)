@@ -1,0 +1,25 @@
+  
+create procedure P_SSB_Convesation  
+as  
+Declare @RessndDlgHandle UNIQUEIDENTIFIER;  
+ DECLARE @ResSndMsgName sysname;  
+Begin  
+WHILE (1=1)  
+ BEGIN  
+  --BEGIN TRANSACTION;  
+   WAITFOR  
+   ( RECEIVE TOP(1)  
+    @RessndDlgHandle = conversation_handle,  
+    --@RecvReqMsg = message_body,  
+    @ResSndMsgName = message_type_name  
+     FROM oubsrcq  
+   ), TIMEOUT 1000;  
+  
+    IF (@@ROWCOUNT = 0)  
+    BEGIN  
+      --ROLLBACK TRANSACTION;  
+      BREAK;  
+    END  
+    end conversation @RessndDlgHandle  
+ end  
+END
