@@ -1,0 +1,168 @@
+  
+  
+CREATE PROCEDURE [dbo].[Sb_receivedata]  
+AS  
+BEGIN  
+ SET NOCOUNT ON  
+ DECLARE @RecvReqDlgHandle UNIQUEIDENTIFIER;  
+ DECLARE @RecvReqMsg XML;  
+ DECLARE @RecvReqMsgName sysname;  
+ Declare @Sendrmsg XML ='';  
+ Declare @ConversationHandle UNIQUEIDENTIFIER;  
+ Declare @parmdefinition NVARCHAR(MAX);  
+ Declare @RecvsndDlgHandle UNIQUEIDENTIFIER;  
+ DECLARE @RecvSndMsgName sysname;  
+ Declare @RessndDlgHandle UNIQUEIDENTIFIER;  
+ DECLARE @ResSndMsgName sysname;  
+ begin try  
+ -- Creatig a loop to get the message one by one from queue  
+ WHILE (1=1)  
+ BEGIN  
+  --BEGIN TRANSACTION;  
+   WAITFOR  
+   ( RECEIVE TOP(1)  
+    @RecvReqDlgHandle = conversation_handle,  
+    @RecvReqMsg = message_body,  
+    @RecvReqMsgName = message_type_name  
+     FROM inbdestq  
+   ), TIMEOUT 1000;  
+  
+    IF (@@ROWCOUNT = 0)  
+    BEGIN  
+      --ROLLBACK TRANSACTION;  
+      BREAK;  
+    END  
+   -- Inserting records  
+  
+   declare @min int,@max int,@mincol int,@maxcol int,@pk nvarchar(50),@table nvarchar(100),@sql nvarchar(max),@val nvarchar(20) ,@mv_pk nvarchar(50),@mv_prt nvarchar(50)  
+   declare  @tab table(id int identity(1,1),name varchar(100),ent_name varchar(100))  
+   declare  @tabval table(id int identity(1,1),colvalue varchar(100))  
+  
+   insert into @tab(name)  
+   select distinct dependent_model_view from data_load_tab_config where TABLE_CHANGED in(select C.value('@source','varchar(100)')  
+   from  @RecvReqMsg.nodes('//sender') AS T(C))  
+  
+   --select distinct view_name from information_schema.view_column_usage where table_name in(select C.value('@source','varchar(100)')  
+   --from  @RecvReqMsg.nodes('//sender') AS T(C))  
+   --and view_name in (select dependent_model_view from data_load_tab_config )   
+   --like 'v_model%'  
+   --and view_name not like 'V_MODEL_MEDICATION_ISSUE_LIST%'  
+   select @mv_prt =C.value('@source','varchar(100)') from  @RecvReqMsg.nodes('//sender') AS T(C)  
+   print @mv_prt  
+   select @min=min(id),@max=max(id) from @tab  
+   while (@min<=@max)  
+   begin  
+    set @Sendrmsg=''  
+    select @table=name from @tab where id=@min  
+    print @table  
+    insert into @tabval  
+    select c.value('@pkval','varchar(20)')  from  @RecvReqMsg.nodes('//sender')  AS T(C)  
+    select @mincol=min(id),@maxcol=max(id) from @tabval  
+    while (@mincol<=@maxcol)  
+    begin  
+    --select @pk=c.value('@pkcol','varchar(100)'),@val=c.value('@pkval','varchar(20)') from  @RecvReqMsg.nodes('//sender')  AS T(C)  
+    --select c.value('@pkcol','varchar(100)'),c.value('@pkval','varchar(20)') from  @RecvReqMsg.nodes('//sender')  AS T(C)  
+    select @mv_pk = mv_pkey from data_load_tab_config where dependent_model_view=@table   
+    and table_changed in(select C.value('@source','varchar(100)')  from  @RecvReqMsg.nodes('//sender') AS T(C))  
+    set @sql=N''  
+    --Build reply message and send back  
+    set @sql=N'Select @Sendrmsgout=c.t from (select '''+@table+''' as TABLE_NAME,* from '+@table+' where '+ @mv_pk+'='+(select colvalue from @tabval where id= @mincol)+' For XML Raw, Elements, Type, Root(''Data''))c(t)'  
+    --print @sql  
+    set @parmdefinition=N'@table VARCHAR(100),@pk VARCHAR(50), @val varchar(20), @Sendrmsgout XML OUTPUT'  
+    execute sp_executesql @sql,@parmdefinition,@table=@table,@pk=@pk,@val=@val, @Sendrmsgout=@Sendrmsg OUTPUT  
+      
+    --IF @RecvReqMsgName = N'http://schemas.microsoft.com/SQL/ServiceBroker/EndDialog'  
+    --BEGIN  
+    --   END CONVERSATION @RecvReqDlgHandle;  
+    --END  
+    --Select  @Sendrmsg  
+    IF datalength(@Sendrmsg) > 0   
+    BEGIN  
+     --Select  @Sendrmsg  
+     Begin Dialog @ConversationHandle  
+      From Service outsendservice  
+      To Service 'oubrcvrservice'  
+      On Contract oubcontract  
+      WITH Encryption=off;  
+      ;SEND ON CONVERSATION @ConversationHandle  
+       Message Type oubsendrmsgtyp  
+       (@Sendrmsg);  
+  
+       --end conversation @ConversationHandle;  
+     --END CONVERSATION @ConversationHandle  
+     -- WITH ERROR = 1234 DESCRIPTION ='NO DATA FOUND'  
+    END  
+  
+    --else  
+    -- print 'Nothing to send'  
+    --BEGIN  
+  
+    --;SEND ON CONVERSATION @RecvReqDlgHandle  
+    --     MESSAGE TYPE  
+    --     [//DB/ghc_model_sb/ReplyMessage]  
+    --     (@reply_message_body);  
+    --END  
+    delete from @tabval where id=@mincol  
+    set @mincol=@mincol+1  
+    end   
+    delete from @tab where id=@min  
+    set @min=@min+1  
+   end  
+    --WITH CLEANUP  
+   -- print @RecvReqMsgName  
+   --IF @RecvReqMsgName = N'inbsendrmsgtyp'  
+   --BEGIN  
+   --print 'JKL'  
+    end conversation @RecvReqDlgHandle;  
+   --END  
+  --COMMIT TRANSACTION;  
+ END  
+ --- inbsrcq sender-----  
+  
+ WHILE (1=1)  
+ BEGIN  
+  --BEGIN TRANSACTION;  
+   WAITFOR  
+   ( RECEIVE TOP(1)  
+    @RecvsndDlgHandle = conversation_handle,  
+    --@RecvReqMsg = message_body,  
+    @RecvSndMsgName = message_type_name  
+     FROM inbsrcq  
+   ), TIMEOUT 1000;  
+  
+    IF (@@ROWCOUNT = 0)  
+    BEGIN  
+      --ROLLBACK TRANSACTION;  
+      BREAK;  
+    END  
+    end conversation @RecvsndDlgHandle  
+ end  
+ --- oubsrcq sender-----  
+ WHILE (1=1)  
+ BEGIN  
+  --BEGIN TRANSACTION;  
+   WAITFOR  
+   ( RECEIVE TOP(1)  
+    @RessndDlgHandle = conversation_handle,  
+    --@RecvReqMsg = message_body,  
+    @ResSndMsgName = message_type_name  
+     FROM oubsrcq  
+   ), TIMEOUT 1000;  
+  
+    IF (@@ROWCOUNT = 0)  
+    BEGIN  
+      --ROLLBACK TRANSACTION;  
+      BREAK;  
+    END  
+    end conversation @RessndDlgHandle  
+ end  
+ end try  
+ begin catch  
+  declare @error int, @message nvarchar(4000);  
+  select @error = ERROR_NUMBER(), @message = ERROR_MESSAGE();  
+  end conversation @RecvReqDlgHandle WITH CLEANUP --with error = @error description = @message;  
+  insert into ssb_error_log(model_name,ssb_msg,error_no,error_msg)values(@table,@sql,@error,@message)   
+ end catch  
+END  
+  
+  
